@@ -1,8 +1,36 @@
 {
     "app_name": "MahjongSoul",
     "crop_x": 200,
-    "crop_y": 850,
-    "crop_w": 1700,
-    "crop_h": 225,
-    "show_debug": true
+    "crop_y": 800,
+    "crop_w": 1650,
+    "crop_h": 300,
+    "show_debug": true,
+    "manual_hand_enabled": false,
+    "manual_hand_string": "79p12446778s2123z",
+    "discard_tracker_enabled": true,
+    "discard_tracker_confirm_frames": 5,
+    "player_bottom": {
+        "start_x": 720,
+        "start_y": 535,
+        "box_w": 60,
+        "box_h": 70
+    },
+    "player_right": {
+        "start_x": 1085,
+        "start_y": 535,
+        "box_w": 70,
+        "box_h": 40
+    },
+    "player_top": {
+        "start_x": 1065,
+        "start_y": 305,
+        "box_w": 50,
+        "box_h": 50
+    },
+    "player_left": {
+        "start_x": 730,
+        "start_y": 300,
+        "box_w": 70,
+        "box_h": 40
+    }
 }

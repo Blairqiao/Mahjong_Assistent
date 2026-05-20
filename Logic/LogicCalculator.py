@@ -12,7 +12,7 @@ class LogicCalculator:
         """
         return self.shanten_calc.calculate_shanten(hand_34_array)
         
-    def calculate_best_discards(self, hand_34_array):
+    def calculate_best_discards(self, hand_34_array, discarded_tiles):
         """
         Calculates the best possible discards to reduce the shanten.
         Uses Ukeire (tile acceptance) to rank the best discards.
@@ -49,7 +49,7 @@ class LogicCalculator:
                             if new_shanten < current_shanten:
                                 # 4. Count: Add the remaining tiles of this type
                                 # (Since we already added 1 to hand_34_array, available is 5 - count)
-                                ukeire_count += 5 - hand_34_array[draw_tile]
+                                ukeire_count += 5 - hand_34_array[draw_tile] - discarded_tiles[draw_tile]
                                 
                             # Revert the draw
                             hand_34_array[draw_tile] -= 1

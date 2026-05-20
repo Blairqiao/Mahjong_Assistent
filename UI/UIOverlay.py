@@ -23,6 +23,8 @@ class AssistantWindow(QMainWindow):
         self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config.json")
         self.settings = self.load_settings()
         self.settings_visible = True
+        self.discard_settings_visible = False
+        self._tile_cache = {}
         
         self.init_ui()
         
@@ -33,8 +35,19 @@ class AssistantWindow(QMainWindow):
             "crop_y": 0,
             "crop_w": 0,
             "crop_h": 0,
-            "show_debug": True
+            "show_debug": True,
+            "manual_hand_enabled": False,
+            "manual_hand_string": "",
+            "discard_tracker_enabled": False,
+            "discard_tracker_confirm_frames": 3,
         }
+        for player in ["player_bottom", "player_right", "player_top", "player_left"]:
+            default[player] = {
+                "start_x": 0,
+                "start_y": 0,
+                "box_w": 0,
+                "box_h": 0
+            }
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r') as f:
@@ -51,7 +64,17 @@ class AssistantWindow(QMainWindow):
             self.settings["crop_y"] = int(self.cy_input.text() or 0)
             self.settings["crop_w"] = int(self.cw_input.text() or 0)
             self.settings["crop_h"] = int(self.ch_input.text() or 0)
-            self.settings["show_debug"] = self.debug_checkbox.isChecked()
+            self.settings["discard_tracker_enabled"] = self.discard_tracker_checkbox.isChecked()
+            
+            for player in ["player_bottom", "player_right", "player_top", "player_left"]:
+                self.settings[player] = {
+                    "start_x": int(self.dt_inputs[player]["start_x"].text() or 0),
+                    "start_y": int(self.dt_inputs[player]["start_y"].text() or 0),
+                    "box_w": int(self.dt_inputs[player]["box_w"].text() or 0),
+                    "box_h": int(self.dt_inputs[player]["box_h"].text() or 0),
+                }
+
+            self.settings["discard_tracker_confirm_frames"] = int(self.discard_tracker_frames_input.text() or 3)
             
             with open(self.config_file, 'w') as f:
                 json.dump(self.settings, f, indent=4)
@@ -59,6 +82,15 @@ class AssistantWindow(QMainWindow):
             self.settings_changed_signal.emit(self.settings)
         except ValueError:
             print("Invalid crop bounds")
+    
+    def save_hand_string(self):
+        try:
+            self.settings["manual_hand_string"] = self.manual_hand_input.text()
+            with open(self.config_file, 'w') as f:
+                json.dump(self.settings, f, indent=4)
+            self.settings_changed_signal.emit(self.settings)
+        except ValueError:
+            print("Invalid hand string")
 
     def init_ui(self):
         self.setWindowTitle("Mahjong Assistant")
@@ -70,17 +102,19 @@ class AssistantWindow(QMainWindow):
         self.layout.setSpacing(4)
         
         # --- Settings UI Section ---
-        self.settings_toggle_btn = QPushButton("Capture Settings")
+        self.settings_toggle_btn = QPushButton("Settings")
         self.settings_toggle_btn.setCheckable(True)
         self.settings_toggle_btn.setChecked(True)
         self.settings_toggle_btn.clicked.connect(self.toggle_settings_panel)
         self.settings_toggle_btn.setStyleSheet(
-            "QPushButton { color: #ffa500; font-size: 16px; font-weight: bold; padding: 6px; background-color: rgba(255, 255, 255, 15); border: 1px solid rgba(255, 255, 255, 30); border-radius: 6px; text-align: left; }"
-            "QPushButton:checked { background-color: rgba(255, 165, 0, 35); }"
+            "QPushButton { color: #3ef09d; font-size: 16px; font-weight: bold; padding: 6px; background-color: rgba(255, 255, 255, 15); border: 1px solid rgba(255, 255, 255, 30); border-radius: 6px; text-align: left; }"
+            "QPushButton:checked { background-color: rgba(3, 64, 36, 35); }"
         )
         self.layout.addWidget(self.settings_toggle_btn)
-
+        # Settings panel (initially visible, can be toggled)
         self.settings_panel = QWidget(self)
+        self.settings_panel.setObjectName("settings_panel")
+        self.settings_panel.setStyleSheet(f"QWidget#settings_panel {{ border: 1px solid rgba(255, 255, 255, 30); border-radius: 6px;}}")
         self.settings_panel_layout = QVBoxLayout(self.settings_panel)
         self.settings_panel_layout.setContentsMargins(4, 0, 4, 0)
         self.settings_panel_layout.setSpacing(4)
@@ -105,20 +139,85 @@ class AssistantWindow(QMainWindow):
             
         # Debug toggle
         self.debug_checkbox = QCheckBox("Show Debug")
-        self.debug_checkbox.setChecked(self.settings.get('show_debug', True))
+        self.debug_checkbox.setChecked(self.settings.get('show_debug', False))
         self.debug_checkbox.setStyleSheet("margin-right: 10px;")
+        self.debug_checkbox.toggled.connect(self.set_debug_preview_visible)
         settings_hbox.addWidget(self.debug_checkbox)
-
+        # Manual hand input toggle
+        self.manual_hand_checkbox = QCheckBox("Manual Hand")
+        self.manual_hand_checkbox.setChecked(self.settings.get("manual_hand_enabled", False))
+        self.manual_hand_checkbox.setStyleSheet("margin-right: 10px;")
+        self.manual_hand_checkbox.toggled.connect(self.toggle_manual_hand_input)
+        settings_hbox.addWidget(self.manual_hand_checkbox)
+        # Discard tracker toggle
+        self.discard_tracker_checkbox = QCheckBox("Enable Discard Trackers")
+        self.discard_tracker_checkbox.setChecked(self.settings.get("discard_tracker_enabled", False))
+        self.discard_tracker_checkbox.toggled.connect(self.toggle_discard_tracker_input)
+        settings_hbox.addWidget(self.discard_tracker_checkbox)
+        # Discard settings toggle
+        self.discard_settings_btn = QPushButton("Discard Tracker Settings")
+        self.discard_settings_btn.setCheckable(True)
+        self.discard_settings_btn.setChecked(self.discard_settings_visible)
+        self.discard_settings_btn.setStyleSheet("background-color: #333; color: white; border-radius: 6px; padding: 4px 12px;")
+        self.discard_settings_btn.clicked.connect(self.toggle_discard_settings_panel)
+        settings_hbox.addWidget(self.discard_settings_btn)
+        # Save button
         self.save_btn = QPushButton("Save")
-        self.save_btn.setStyleSheet("background-color: #333; color: white;")
+        self.save_btn.setStyleSheet("background-color: #333; color: white; border-radius: 6px; padding: 4px 12px;")
         self.save_btn.clicked.connect(self.save_settings)
         settings_hbox.addWidget(self.save_btn)
         
         self.layout.addWidget(self.settings_panel)
+        # Manual hand input section
+        self.manual_hand_container = QWidget(self)
+        manual_hand_layout = QHBoxLayout(self.manual_hand_container)
+        manual_hand_layout.setContentsMargins(4, 0, 4, 0)
+        manual_hand_layout.addWidget(QLabel("Hand String:", styleSheet="color: white;"))
+        self.manual_hand_input = QLineEdit(self.settings.get("manual_hand_string", ""))
+        self.manual_hand_input.setPlaceholderText("123m456p789s12345z")
+        self.manual_hand_save_btn = QPushButton("Save Hand")
+        self.manual_hand_save_btn.setStyleSheet("background-color: #333; color: white; border-radius: 6px; padding: 4px 12px;")
+        self.manual_hand_save_btn.clicked.connect(self.save_hand_string)
+        manual_hand_layout.addWidget(self.manual_hand_input)
+        manual_hand_layout.addWidget(self.manual_hand_save_btn)
+        self.manual_hand_container.setVisible(self.manual_hand_checkbox.isChecked())
+        self.layout.addWidget(self.manual_hand_container)
+
+        self.discard_tracker_container = QWidget(self)
+        discard_tracker_layout = QGridLayout(self.discard_tracker_container)
+        discard_tracker_layout.setContentsMargins(4, 0, 4, 0)
+        discard_tracker_layout.setSpacing(4)
+        
+        headers = ["Position", "Start X", "Start Y", "Box W", "Box H"]
+        for col, header in enumerate(headers):
+            discard_tracker_layout.addWidget(QLabel(header, styleSheet="color: white; font-weight: bold;"), 0, col)
+
+        self.dt_inputs = {}
+        players = ["player_bottom", "player_right", "player_top", "player_left"]
+        display_names = ["Bottom", "Right", "Top", "Left"]
+        
+        for row, (player, display_name) in enumerate(zip(players, display_names), start=1):
+            self.dt_inputs[player] = {}
+            discard_tracker_layout.addWidget(QLabel(display_name + ":", styleSheet="color: white;"), row, 0)
+            player_settings = self.settings.get(player, {})
+            for col, attr in enumerate(["start_x", "start_y", "box_w", "box_h"], start=1):
+                inp = QLineEdit(str(player_settings.get(attr, 0)))
+                inp.setFixedWidth(50)
+                self.dt_inputs[player][attr] = inp
+                discard_tracker_layout.addWidget(inp, row, col)
+
+        discard_tracker_layout.addWidget(QLabel("Confirm:", styleSheet="color: white;"), 5, 0)
+        self.discard_tracker_frames_input = QLineEdit(str(self.settings.get("discard_tracker_confirm_frames", 3)))
+        self.discard_tracker_frames_input.setFixedWidth(50)
+        discard_tracker_layout.addWidget(self.discard_tracker_frames_input, 5, 1)
+
+        self.discard_tracker_container.setVisible(False)
+        self.layout.addWidget(self.discard_tracker_container)
         
         # Engine Status UI
         self.status_label = QLabel("Engine Status: Waiting to lock...", self)
         self.status_label.setStyleSheet("color: cyan; font-size: 14px; padding-top: 2px; margin-bottom: 2px;")
+        self.status_label.setVisible(self.settings.get("show_debug", False))
         self.layout.addWidget(self.status_label)
         
         # Debug Vision Window
@@ -126,7 +225,8 @@ class AssistantWindow(QMainWindow):
         self.debug_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.debug_label.setStyleSheet("background-color: #000; border: 1px solid #444;")
         self.debug_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.debug_label.setMaximumHeight(theme.DEBUG_HEIGHT)
+        self.debug_label.setMaximumHeight(16777215)
+        self.debug_label.setVisible(self.settings.get("show_debug", False))
         self.layout.addWidget(self.debug_label)
         
         # Current Hand UI Section 
@@ -192,9 +292,15 @@ class AssistantWindow(QMainWindow):
         
         self.central_widget.setLayout(self.layout)
         self.setCentralWidget(self.central_widget)
-        self._update_window_geometry()
+        self._update_window_geometry()        
 
     def _build_tile_pixmap(self, tile_name):
+        if not tile_name:
+            return QPixmap()
+            
+        if tile_name in self._tile_cache:
+            return self._tile_cache[tile_name]
+            
         base_dir = os.path.dirname(os.path.abspath(__file__))
         tiles_dir = os.path.join(base_dir, "..", "assets", "tiles")
         front_path = os.path.join(tiles_dir, "Front.png")
@@ -216,6 +322,8 @@ class AssistantWindow(QMainWindow):
         # High DPI scaling (base size)
         base_pixmap = base_pixmap.scaledToHeight(theme.TILE_HEIGHT, Qt.TransformationMode.SmoothTransformation)
         base_pixmap.setDevicePixelRatio(2)
+        
+        self._tile_cache[tile_name] = base_pixmap
         return base_pixmap
 
     def _ukeire_style(self, value, min_value, max_value):
@@ -234,18 +342,8 @@ class AssistantWindow(QMainWindow):
         )
 
     def update_data(self, current_state):
-        if self.settings.get("show_debug", True):
-            # Ensure status label is visible and sized normally when debug is shown
-            self.status_label.setVisible(True)
-            self.status_label.setMaximumHeight(16777215)
-            self.status_label.setMinimumHeight(0)
-            self.status_label.setText(f"Engine Status: {current_state.get('status', '')}")
-        else:
-            # Fully hide and collapse the status label so it doesn't reserve layout space
-            self.status_label.clear()
-            self.status_label.setVisible(False)
-            self.status_label.setMaximumHeight(0)
-            self.status_label.setMinimumHeight(0)
+
+        self.status_label.setText(f"Engine Status: {current_state.get('status', '')}")
 
         shanten_val = current_state.get('shanten')
         if shanten_val is not None:
@@ -258,17 +356,17 @@ class AssistantWindow(QMainWindow):
         
         # Display debug vision frame
         debug_frame = current_state.get('debug_frame')
-        if debug_frame is not None and self.settings.get("show_debug", True):
-            self.set_debug_preview_visible(True)
+        if debug_frame is not None and self.settings.get("show_debug", False):
             height, width, channel = debug_frame.shape
             bytesPerLine = 3 * width
             # Convert BGR to RGB for Qt displaying properly
             qImg = QImage(debug_frame.data, width, height, bytesPerLine, QImage.Format.Format_BGR888)
             pix = QPixmap.fromImage(qImg)
             # Scale it down so it fits nicely
-            self.debug_label.setPixmap(pix.scaled(800, 350, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            self.debug_label.setPixmap(pix.scaled(600, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         else:
-            self.set_debug_preview_visible(False)
+            self.debug_label.clear()
+        
 
         # Clear out existing labels in case they get shortened
         for ukeire_lbl, tile_lbl in self.hand_tile_widgets:
@@ -325,16 +423,42 @@ class AssistantWindow(QMainWindow):
                     ukeire_lbl.setStyleSheet(self._ukeire_style(discard_ukeire, 0, discard_ukeire))
 
     def set_debug_preview_visible(self, visible: bool):
+
+        self.settings["show_debug"] = visible
+        with open(self.config_file, 'w') as f:
+            json.dump(self.settings, f, indent=4)
+        self.settings_changed_signal.emit(self.settings)
+
         if visible:
             self.debug_label.setVisible(True)
-            self.debug_label.setMaximumHeight(theme.DEBUG_HEIGHT)
+            self.debug_label.setMaximumHeight(16777215)
             self.debug_label.setMinimumHeight(0)
+
+            self.status_label.setVisible(True)
+            self.status_label.setMaximumHeight(16777215)
+            self.status_label.setMinimumHeight(0)
         else:
             self.debug_label.clear()
             self.debug_label.setMaximumHeight(0)
             self.debug_label.setMinimumHeight(0)
             self.debug_label.setVisible(False)
 
+            self.status_label.clear()
+            self.status_label.setVisible(False)
+            self.status_label.setMaximumHeight(0)
+            self.status_label.setMinimumHeight(0)
+    
+    def toggle_discard_settings_panel(self):
+        self.discard_settings_visible = self.discard_settings_btn.isChecked()
+        if self.discard_settings_visible:
+            self.discard_tracker_container.setVisible(True)
+            self.discard_tracker_container.setMaximumHeight(16777215)
+            self.discard_tracker_container.setMinimumHeight(0)
+        else:
+            self.discard_tracker_container.setMaximumHeight(0)
+            self.discard_tracker_container.setMinimumHeight(0)
+            self.discard_tracker_container.setVisible(False)
+        
     def toggle_settings_panel(self):
         self.settings_visible = self.settings_toggle_btn.isChecked()
         if self.settings_visible:
@@ -345,6 +469,24 @@ class AssistantWindow(QMainWindow):
             self.settings_panel.setMaximumHeight(0)
             self.settings_panel.setMinimumHeight(0)
             self.settings_panel.setVisible(False)
+        self._update_window_geometry()
+
+    def toggle_manual_hand_input(self, visible):
+        self.manual_hand_container.setVisible(visible)
+        self.settings["manual_hand_enabled"] = visible
+        with open(self.config_file, 'w') as f:
+            json.dump(self.settings, f, indent=4)
+        self.settings_changed_signal.emit(self.settings)
+        
+        self._update_window_geometry()
+
+    def toggle_discard_tracker_input(self, visible):
+        self.discard_tracker_container.setVisible(visible)
+        self.settings["discard_tracker_enabled"] = visible
+        with open(self.config_file, 'w') as f:
+            json.dump(self.settings, f, indent=4)
+        self.settings_changed_signal.emit(self.settings)
+
         self._update_window_geometry()
 
     def _update_window_geometry(self):
